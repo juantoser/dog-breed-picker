@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 from dataclasses import dataclass
-from typing import Protocol
+from functools import lru_cache
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+
+if TYPE_CHECKING:
+    from openai import AsyncAzureOpenAI
 
 
 class Recommendation(BaseModel):
@@ -65,14 +71,124 @@ class StubRecommender:
         )
 
 
+SYSTEM_PROMPT = (
+    "You are a warm, playful assistant for a demo app that suggests which dog breed "
+    "suits a person, based on the vibe of the photo they share. "
+    "Look at the overall style, energy and mood of the photo -- never guess at identity, "
+    "age, ethnicity, health or any other sensitive attribute, and never describe the "
+    "person's appearance in a judgemental way. "
+    "Pick one real, well-known dog breed and explain the match in one or two friendly "
+    "sentences that reference the mood or style you picked up on. "
+    "Keep it light: this is entertainment, not analysis. "
+    "If the photo has no person in it, still pick a fun breed and say you went on the "
+    "mood of the picture instead."
+)
+
+RESPONSE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dog_breed_recommendation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "breed": {
+                    "type": "string",
+                    "description": "The recommended dog breed name.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "One or two friendly sentences explaining the match.",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Playful confidence score between 0 and 1.",
+                },
+            },
+            "required": ["breed", "reason", "confidence"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 class FoundryRecommender:
+    """Recommends a breed using a vision model deployed on Microsoft Foundry.
+
+    Authenticates with ``DefaultAzureCredential`` so it uses the App Service
+    managed identity in Azure and the developer's ``az login`` locally. No API
+    keys are stored anywhere.
+    """
+
     def __init__(self, settings: Settings) -> None:
+        if not settings.foundry_endpoint or not settings.foundry_deployment:
+            raise RuntimeError(
+                "FOUNDRY_ENDPOINT and FOUNDRY_DEPLOYMENT must be set when "
+                "RECOMMENDER_MODE=foundry."
+            )
         self.settings = settings
+        self._client: AsyncAzureOpenAI | None = None
+
+    def _get_client(self) -> AsyncAzureOpenAI:
+        if self._client is None:
+            from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
+            from openai import AsyncAzureOpenAI as _AsyncAzureOpenAI
+
+            token_provider = get_bearer_token_provider(
+                DefaultAzureCredential(),
+                "https://cognitiveservices.azure.com/.default",
+            )
+            self._client = _AsyncAzureOpenAI(
+                azure_endpoint=self.settings.foundry_endpoint,
+                azure_ad_token_provider=token_provider,
+                api_version=self.settings.foundry_api_version,
+            )
+        return self._client
 
     async def recommend(
         self, image_bytes: bytes, content_type: str, message: str | None
     ) -> Recommendation:
-        raise NotImplementedError("Azure Foundry recommender is not wired in this iteration.")
+        data_url = f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        user_text = (
+            message.strip()
+            if message and message.strip()
+            else "Which dog breed suits me, based on this photo?"
+        )
+
+        client = self._get_client()
+        completion = await client.chat.completions.create(
+            model=self.settings.foundry_deployment,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ],
+            response_format=RESPONSE_SCHEMA,
+            max_completion_tokens=self.settings.foundry_max_tokens,
+        )
+
+        content = completion.choices[0].message.content
+        if not content:
+            raise RuntimeError("Foundry returned an empty response.")
+
+        payload = json.loads(content)
+        confidence = float(payload.get("confidence", 0.75))
+        return Recommendation(
+            breed=str(payload["breed"]),
+            reason=str(payload["reason"]),
+            confidence=round(min(max(confidence, 0.0), 1.0), 2),
+            source="foundry",
+        )
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
 
 def get_recommender(settings: Settings | None = None) -> Recommender:
@@ -82,7 +198,21 @@ def get_recommender(settings: Settings | None = None) -> Recommender:
     return StubRecommender()
 
 
+@lru_cache
+def _default_recommender() -> Recommender:
+    """Cached singleton so the Foundry client and credential are reused."""
+    return get_recommender()
+
+
 async def recommend_breed(
     image_bytes: bytes, content_type: str, message: str | None
 ) -> Recommendation:
-    return await get_recommender().recommend(image_bytes, content_type, message)
+    return await _default_recommender().recommend(image_bytes, content_type, message)
+
+
+async def shutdown_recommender() -> None:
+    recommender = _default_recommender()
+    closer = getattr(recommender, "aclose", None)
+    if closer is not None:
+        await closer()
+    _default_recommender.cache_clear()

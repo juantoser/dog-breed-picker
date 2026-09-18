@@ -1,16 +1,26 @@
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.recommender import Recommendation, recommend_breed
+from app.recommender import Recommendation, recommend_breed, shutdown_recommender
+
+logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 ROOT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT_DIR / "static"
 
-app = FastAPI(title="Dog Breed Picker")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await shutdown_recommender()
+
+
+app = FastAPI(title="Dog Breed Picker", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -40,5 +50,9 @@ async def recommend(
 
     try:
         return await recommend_breed(image_bytes, image.content_type, message)
-    except NotImplementedError as exc:
-        return JSONResponse(status_code=501, content={"detail": str(exc)})
+    except Exception:
+        logger.exception("Breed recommendation failed")
+        raise HTTPException(
+            status_code=502,
+            detail="The breed recommender is unavailable right now. Please try again.",
+        ) from None
