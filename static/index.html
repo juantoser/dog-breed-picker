@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dog Breed Picker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell" aria-label="Dog breed picker chat">
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true">🐾</div>
+        <div>
+          <h1>Dog Breed Picker</h1>
+          <p>Upload a photo and get a playful breed match.</p>
+        </div>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite" aria-label="Chat messages"></section>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <div id="preview" class="preview" hidden>
+          <img id="preview-image" alt="Selected image preview" />
+          <button id="remove-image" type="button" aria-label="Remove selected image">×</button>
+        </div>
+        <div class="composer-bar">
+          <label class="attach-button" for="image-input" title="Attach a photo">
+            <span aria-hidden="true">＋</span>
+            <span class="sr-only">Attach a photo</span>
+          </label>
+          <input id="image-input" type="file" accept="image/*" hidden />
+          <input
+            id="message-input"
+            type="text"
+            placeholder="Add a note, then attach your photo..."
+            aria-label="Message"
+          />
+          <button id="send-button" type="submit">Send</button>
+        </div>
+      </form>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
