@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "webAppName": {
+      "value": "dog-breed-picker"
+    },
+    "appServicePlanName": {
+      "value": "asp-dog-breed-picker"
+    },
+    "foundryResourceGroupName": {
+      "value": "rg-foundry-local"
+    },
+    "foundryAccountName": {
+      "value": "f-local-resource"
+    },
+    "foundryDeployment": {
+      "value": "gpt-5.4-mini"
+    },
+    "recommenderMode": {
+      "value": "stub"
+    }
+  }
+}
